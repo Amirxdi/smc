@@ -32,7 +32,8 @@ from market import (
     get_scan_interval,
     get_trendline_interval,
 )
-from scanner import Scanner
+from scanner import scan_all_symbols, GLOBAL_TRACKER
+from level_tracker import format_level_touch_events, format_sweep_events
 from trendline_analyzer import scan_trendline_breakouts, format_trendline_results
 
 load_dotenv()
@@ -64,101 +65,100 @@ def get_chat_id():
 # ====== SCAN FUNCTIONS ======
 
 
-async def run_price_touch_scan() -> list:
-    """Run the SMC price touch scanner across all enabled exchanges."""
+async def run_level_scan() -> dict:
+    """
+    Run the untouched level scanner across all enabled exchanges.
+    Uses the global LevelTracker to remember levels between scans.
+
+    Returns:
+        dict: Aggregated touch events, sweep events, and stats
+    """
     exchanges = get_enabled_exchanges()
     if not exchanges:
-        return []
+        return {"touches": [], "sweeps": [], "new_1d": 0, "new_4h": 0, "total_tracked": 0}
 
-    results = []
+    all_touches = []
+    all_sweeps = []
+    total_new_1d = 0
+    total_new_4h = 0
+
     for exchange_name in exchanges:
         label = EXCHANGE_CONFIGS[exchange_name]["label"]
-        logger.info(f"Price touch scan on {label}...")
+        logger.info(f"Level scan on {label} (tracking {GLOBAL_TRACKER.total_levels} levels)...")
 
         market = Market(exchange_name)
-        scanner = Scanner(market)
 
         try:
             symbols = await market.get_usdt_perpetual_pairs()
             if not symbols:
-                results.append({
-                    "exchange": exchange_name,
-                    "label": label,
-                    "touches": [],
-                    "analyses": None,
-                })
                 continue
 
-            touches = await scanner.scan_all(symbols)
-
-            analyses = None
-            if touches:
-                analyses = await scanner.ai_analyzer.analyze_multiple(touches)
-
-            results.append({
-                "exchange": exchange_name,
-                "label": label,
-                "touches": touches,
-                "analyses": analyses,
-            })
+            result = await scan_all_symbols(symbols, market, GLOBAL_TRACKER, label)
+            all_touches.extend(result["touches"])
+            all_sweeps.extend(result["sweeps"])
+            total_new_1d += result["new_levels_1d"]
+            total_new_4h += result["new_levels_4h"]
 
         finally:
             await market.close()
 
-    return results
+    return {
+        "touches": all_touches,
+        "sweeps": all_sweeps,
+        "new_1d": total_new_1d,
+        "new_4h": total_new_4h,
+        "total_tracked": GLOBAL_TRACKER.total_levels,
+    }
 
 
-def format_price_touch_results(exchange_results: list) -> str:
-    """Format price touch scan results into a Telegram message."""
-    total_touches = sum(len(r["touches"]) for r in exchange_results)
-
-    if total_touches == 0:
-        return (
-            "🔍 <b>SMC Crypto Scanner</b>\n\n"
-            "No price touches detected across any exchange.\n"
-            "Try again later when the market moves."
-        )
+def format_level_scan_summary(result: dict) -> str:
+    """Format a summary of the level scan for Telegram."""
+    touches = result["touches"]
+    sweeps = result["sweeps"]
+    total = GLOBAL_TRACKER.total_levels
 
     lines = [
-        f"🔍 <b>SMC Crypto Scanner — Results</b>",
+        "🎯 <b>Level Scanner Summary</b>",
         f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</i>\n",
+        f"📊 Tracking <b>{total}</b> untouched levels across all exchanges\n",
+        f"🆕 New 1D levels: {result['new_1d']}",
+        f"🆕 New 4H levels: {result['new_4h']}",
     ]
 
-    for result in exchange_results:
-        touches = result["touches"]
-        analyses = result["analyses"]
-        label = result["label"]
-
-        if not touches:
-            continue
-
-        lines.append(f"<b>── {label} ──</b>\n")
-
-        for touch in touches:
-            symbol = touch["symbol"]
-            price = touch["current_price"]
-
-            if touch["touch_high"]:
-                icon = "🔺"
-                level_type = "previous <b>HIGH</b>"
-                level_price = touch["prev_high"]
-            else:
-                icon = "🔻"
-                level_type = "previous <b>LOW</b>"
-                level_price = touch["prev_low"]
-
-            lines.append(
-                f"{icon} <b>{symbol}</b>\n"
-                f"   Price: <code>{price:.8f}</code>\n"
-                f"   Touched {level_type}: <code>{level_price:.8f}</code>"
-            )
-
-            if analyses and symbol in analyses:
-                analysis = analyses[symbol]
-                if analysis:
-                    lines.append(f"   🤖 {analysis}")
-
+    # Add touch events
+    if touches:
+        lines.append(f"\n<b>── Touches ({len(touches)}) ──</b>\n")
+        for ev in touches:
+            lines.append(ev["message"])
             lines.append("")
+
+    # Add sweep events
+    if sweeps:
+        lines.append(f"\n<b>── Liquidity Sweeps ({len(sweeps)}) ──</b>\n")
+        for sw in sweeps:
+            if sw.sweep_type == "bearish":
+                lines.append(
+                    f"🔻 <b>Bearish Sweep</b> [{sw.exchange}] {sw.symbol}\n"
+                    f"   Timeframe: {sw.timeframe}\n"
+                    f"   Level: <code>{sw.level_price:.8f}</code>\n"
+                    f"   Wicked to: <code>{sw.wick_price:.8f}</code>\n"
+                    f"   Closed at: <code>{sw.close_price:.8f}</code>\n"
+                    f"   ❌ Bearish rejection!"
+                )
+            else:
+                lines.append(
+                    f"🔺 <b>Bullish Sweep</b> [{sw.exchange}] {sw.symbol}\n"
+                    f"   Timeframe: {sw.timeframe}\n"
+                    f"   Level: <code>{sw.level_price:.8f}</code>\n"
+                    f"   Wicked to: <code>{sw.wick_price:.8f}</code>\n"
+                    f"   Closed at: <code>{sw.close_price:.8f}</code>\n"
+                    f"   ✅ Bullish rejection!"
+                )
+            lines.append("")
+
+    if not touches and not sweeps:
+        lines.append("\nNo touches or sweeps detected this cycle.")
+        lines.append("Levels are being collected — first alert comes when price moves!")
 
     lines.append("Use /scan to run again.")
     return "\n".join(lines).strip()
@@ -218,33 +218,40 @@ def format_trendline_auto_results(breakouts: list) -> str:
 # ====== AUTO-SCAN BACKGROUND TASKS ======
 
 
-async def auto_price_touch_scan_loop(app: Application) -> None:
-    """Background loop: periodically run price touch scans."""
+async def auto_level_scan_loop(app: Application) -> None:
+    """Background loop: periodically scan for untouched level touches and sweeps."""
     interval = get_scan_interval()
     chat_id = get_chat_id()
-    logger.info(f"Auto price touch scan started. Interval: every {interval} min")
+    logger.info(f"Auto level scan started. Interval: every {interval} min")
 
     while True:
         await asyncio.sleep(interval * 60)
 
         try:
-            logger.info("Running auto price touch scan...")
-            results = await run_price_touch_scan()
-            total = sum(len(r["touches"]) for r in results)
+            logger.info("Running auto level scan...")
+            result = await run_level_scan()
+            touches = result["touches"]
+            sweeps = result["sweeps"]
 
-            if total > 0:
-                message = format_price_touch_results(results)
+            if touches or sweeps:
+                message = format_level_scan_summary(result)
                 await app.bot.send_message(
                     chat_id=chat_id,
                     text=message,
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
-                logger.info(f"Auto scan sent: {total} touches detected.")
+                logger.info(
+                    f"Auto level scan sent: {len(touches)} touches, "
+                    f"{len(sweeps)} sweeps, tracking {result['total_tracked']} levels."
+                )
             else:
-                logger.info("Auto scan: no touches detected.")
+                logger.info(
+                    f"Auto level scan: no events. "
+                    f"Tracking {result['total_tracked']} levels."
+                )
         except Exception as e:
-            logger.error(f"Auto price touch scan error: {e}")
+            logger.error(f"Auto level scan error: {e}")
 
 
 async def auto_trendline_scan_loop(app: Application) -> None:
@@ -307,7 +314,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Run a manual price touch scan."""
+    """Run a manual level scan for untouched touches and sweeps."""
     user = update.effective_user
     exchanges = get_enabled_exchanges()
     exchange_labels = [EXCHANGE_CONFIGS[e]["label"] for e in exchanges]
@@ -319,10 +326,14 @@ async def scan_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     try:
-        results = await run_price_touch_scan()
-        total = sum(len(r["touches"]) for r in results)
-        logger.info(f"Scan complete: {total} touches detected.")
-        message = format_price_touch_results(results)
+        result = await run_level_scan()
+        touches = result["touches"]
+        sweeps = result["sweeps"]
+        logger.info(
+            f"Scan complete: {len(touches)} touches, {len(sweeps)} sweeps, "
+            f"tracking {result['total_tracked']} levels."
+        )
+        message = format_level_scan_summary(result)
         await update.message.reply_html(message)
     except Exception as e:
         logger.error(f"Error during scan: {e}")
@@ -428,7 +439,7 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def post_init(application: Application) -> None:
     """Called after the Application starts. Launches auto-scan background tasks."""
     logger.info("Starting background auto-scan tasks...")
-    asyncio.create_task(auto_price_touch_scan_loop(application))
+    asyncio.create_task(auto_level_scan_loop(application))
     asyncio.create_task(auto_trendline_scan_loop(application))
     logger.info("Background auto-scan tasks started.")
 
