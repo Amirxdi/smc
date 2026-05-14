@@ -1,0 +1,27 @@
+import asyncio
+import ccxt.async_support as ccxt
+
+async def test():
+    configs = [
+        ('bybit', ccxt.bybit, {'options': {'fetchMarkets': {'types': ['linear']}, 'defaultType': 'swap', 'defaultSettle': 'USDT'}}),
+        ('okx', ccxt.okx, {'options': {'defaultType': 'swap'}, 'options': {'fetchMarkets': {'types': ['swap']}}}),
+        ('mexc', ccxt.mexc, {'options': {'defaultType': 'swap', 'fetchMarkets': {'types': ['swap']}}}),
+        ('gate', ccxt.gateio, {'options': {'defaultType': 'swap'}}),
+    ]
+    
+    for name, cls, opts in configs:
+        try:
+            ex = cls({'enableRateLimit': True, **opts})
+            await ex.load_markets()
+            perps = []
+            for s, m in ex.markets.items():
+                if m.get('contract') and s.endswith('/USDT'):
+                    perps.append(s)
+            count = len(perps)
+            sample = perps[0] if perps else 'none'
+            print(f"{name}: {count} USDT perpetuals (e.g. {sample})")
+            await ex.close()
+        except Exception as e:
+            print(f"{name}: FAIL - {e}")
+
+asyncio.run(test())
