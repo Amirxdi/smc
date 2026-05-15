@@ -7,8 +7,12 @@ Uses LevelTracker to remember levels between scan cycles.
 """
 
 import asyncio
+import logging
 from ai_analyzer import AIAnalyzer
 from level_tracker import LevelTracker, format_level_touch_events, format_sweep_events
+
+
+logger = logging.getLogger(__name__)
 
 
 # Global level tracker — persists across scan cycles
@@ -71,7 +75,7 @@ async def scan_symbol_levels(symbol, market, tracker=None, exchange=""):
             result["sweeps"].extend(sweeps_1d)
 
     # ─── Fetch 4H candles ─────────────────────────────
-    fourh_candles = await market.fetch_candles(symbol, timeframe="4h", limit=50)
+    fourh_candles = await market.fetch_4h_candles(symbol, limit=50)
     current_4h = fourh_candles[-1] if fourh_candles and len(fourh_candles) >= 1 else None
     if len(fourh_candles) >= 10:
         # Find and add new 4h swing levels
@@ -130,9 +134,12 @@ async def scan_all_symbols(symbols, market, tracker=None, exchange=""):
             scan_symbol_levels(symbol, market, tracker, exchange)
             for symbol in batch
         ]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         for r in results:
+            if isinstance(r, Exception):
+                logger.error("Symbol scan error: %s", r)
+                continue
             all_touches.extend(r["touches"])
             all_sweeps.extend(r["sweeps"])
             total_new_1d += r["new_levels_1d"]

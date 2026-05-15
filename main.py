@@ -76,11 +76,13 @@ def _register_signal_handlers():
 def run_bot():
     """
     Start the Telegram bot with automatic crash recovery.
-    Loops forever, restarting the bot on unexpected errors.
+    Loops forever, restarting the bot on unexpected errors or
+    when the polling connection drops (Telegram long-polling
+    connections often time out after ~30–50 minutes).
     """
     from telegram_bot import main as bot_main
 
-    max_restarts = 50
+    max_restarts = 9999       # practically infinite
     restart_count = 0
     base_delay = 5  # seconds
 
@@ -91,13 +93,20 @@ def run_bot():
 
         try:
             logger.info(
-                "Starting bot (restart #%d of %d)…",
-                restart_count, max_restarts,
+                "Starting bot (restart #%d)…",
+                restart_count,
             )
             bot_main()
-            # bot_main() blocks — if it returns cleanly, we're done
-            logger.info("Bot exited cleanly.")
-            break
+            # bot_main() blocks — if it returns (even "cleanly"),
+            # it's usually because the long-polling connection
+            # dropped.  We restart instead of exiting.
+            restart_count += 1
+            delay = min(base_delay * (2 ** min(restart_count - 1, 5)), 300)
+            logger.info(
+                "Bot polling returned (restart #%d). Restarting in %ds…",
+                restart_count, delay,
+            )
+            _shutdown_event.wait(delay)
         except KeyboardInterrupt:
             logger.info("KeyboardInterrupt received.")
             break
@@ -106,13 +115,14 @@ def run_bot():
             if e.code != 0:
                 logger.error("Bot exited with code %d — stopping.", e.code)
                 sys.exit(e.code)
+            logger.info("SystemExit(0) — stopping.")
             break
         except Exception as e:
             restart_count += 1
             delay = min(base_delay * (2 ** min(restart_count - 1, 5)), 300)
             logger.exception(
-                "Bot crashed (restart %d/%d). Restarting in %ds…",
-                restart_count, max_restarts, delay,
+                "Bot crashed (restart #%d). Restarting in %ds…",
+                restart_count, delay,
             )
             _shutdown_event.wait(delay)
 

@@ -415,7 +415,7 @@ def main():
     app.run_polling(
         allowed_updates=Update.ALL_TYPES,
         drop_pending_updates=True,
-        close_loop=False,
+        close_loop=True,          # clean up event loop when polling stops
     )
 
 
