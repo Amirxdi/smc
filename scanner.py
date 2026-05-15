@@ -42,9 +42,6 @@ async def scan_symbol_levels(symbol, market, tracker=None, exchange=""):
     if tracker is None:
         tracker = GLOBAL_TRACKER
 
-    # Set symbol context for touch/sweep checking
-    tracker.set_symbol(symbol)
-
     result = {
         "touches": [],
         "sweeps": [],

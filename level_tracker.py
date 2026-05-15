@@ -32,7 +32,7 @@ class Level:
         self.level_type = level_type  # 'high' or 'low'
         self.price = price
         self.candle_time = candle_time
-        self.created_at = datetime.now().timestamp()
+        self.created_at = datetime.now().timestamp() * 1000
         self.exchange = exchange
         self.is_live = is_live
 

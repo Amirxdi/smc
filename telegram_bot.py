@@ -253,8 +253,6 @@ async def auto_trendline_scan_loop(app: Application) -> None:
                     symbols = await market.get_usdt_perpetual_pairs()
                     if symbols:
                         b = await scan_trendline_breakouts(symbols, market)
-                        for bt in b:
-                            bt["exchange"] = label
                         breakouts.extend(b)
                 finally:
                     await market.close()
@@ -315,8 +313,6 @@ async def cmd_trendline(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 symbols = await m.get_usdt_perpetual_pairs()
                 if symbols:
                     b = await scan_trendline_breakouts(symbols, m)
-                    for bt in b:
-                        bt["exchange"] = label
                     breakouts.extend(b)
             finally:
                 await m.close()
