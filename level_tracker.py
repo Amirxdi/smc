@@ -169,7 +169,7 @@ class LevelTracker:
 
         return new_levels
 
-    def check_touches(self, current_candle, tolerance=0.001):
+    def check_touches(self, current_candle, symbol=None, tolerance=0.001):
         """
         Check if the current candle has touched any tracked levels.
 
@@ -177,6 +177,7 @@ class LevelTracker:
 
         Args:
             current_candle (list): Latest candle [timestamp, open, high, low, close, volume]
+            symbol (str): Symbol to filter levels by (defaults to _symbol_hint for backward compat)
             tolerance (float): Fractional tolerance for matching
 
         Returns:
@@ -193,8 +194,10 @@ class LevelTracker:
 
         keys_to_remove = []
 
+        target_symbol = symbol if symbol is not None else getattr(self, "_symbol_hint", None)
+
         for k, level in self._levels.items():
-            if level.symbol != self._symbol_hint:
+            if level.symbol != target_symbol:
                 continue
 
             if level.level_type == "high":
@@ -242,7 +245,7 @@ class LevelTracker:
 
         return touches
 
-    def check_liquidity_sweeps(self, current_candle, tolerance=0.001):
+    def check_liquidity_sweeps(self, current_candle, symbol=None, tolerance=0.001):
         """
         Detect liquidity sweeps (false breakouts).
 
@@ -250,6 +253,7 @@ class LevelTracker:
 
         Args:
             current_candle (list): Latest candle [timestamp, open, high, low, close, volume]
+            symbol (str): Symbol to filter levels by (defaults to _symbol_hint for backward compat)
             tolerance (float): Fractional tolerance
 
         Returns:
@@ -265,8 +269,10 @@ class LevelTracker:
 
         keys_to_remove = []
 
+        target_symbol = symbol if symbol is not None else getattr(self, "_symbol_hint", None)
+
         for k, level in self._levels.items():
-            if level.symbol != self._symbol_hint:
+            if level.symbol != target_symbol:
                 continue
 
             if level.level_type == "high":
@@ -309,8 +315,8 @@ class LevelTracker:
 
     def clear_old_levels(self, max_age_hours=48):
         """Remove levels older than max_age_hours."""
-        now = datetime.now().timestamp()
-        cutoff = now - (max_age_hours * 3600)
+        now_ms = datetime.now().timestamp() * 1000
+        cutoff = now_ms - (max_age_hours * 3600 * 1000)
         keys_to_remove = [
             k for k, v in self._levels.items()
             if v.candle_time < cutoff

@@ -1,41 +1,146 @@
 #!/usr/bin/env python3
 """
-Main entry point for SMC Crypto Futures Scanner.
-Launches the Telegram bot with a lightweight HTTP health-check server
-for Render deployment.
+main.py — Entry point for SMC Crypto Futures Scanner (v2.0).
+
+Improvements over v1:
+- Graceful shutdown on SIGINT/SIGTERM
+- Crash auto-restart (wraps bot start in a retry loop)
+- Health-check HTTP server for Render/Railway
+- Logging configuration
 """
 
+import asyncio
+import logging
 import os
+import signal
+import sys
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from telegram_bot import main as start_bot
+
+from config import HEALTH_PORT, LOG_LEVEL
+
+# Must configure logging before importing other modules
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+# ─── Health server (for Render / Railway) ────────────────────────────────
 
 
 class HealthHandler(BaseHTTPRequestHandler):
-    """Minimal health-check endpoint for Render."""
+    """Minimal health-check endpoint."""
 
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"SMC Scanner Bot is running")
+        self.wfile.write(b"SMC Scanner Bot v2.0 is running")
 
-    def log_message(self, format, *args):
-        pass  # Suppress HTTP logs
+    def log_message(self, fmt, *args):
+        pass  # suppress HTTP debug logs
 
 
 def run_health_server():
-    """Start a lightweight HTTP server on $PORT for Render health checks."""
-    port = int(os.getenv("PORT", 10000))
+    """Run a lightweight HTTP health server in a background thread."""
+    port = HEALTH_PORT
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    print(f"✅ Health server listening on port {port}")
+    logger.info("Health server listening on port %d", port)
     server.serve_forever()
 
 
-if __name__ == "__main__":
-    # Start health server in a background thread
+# ─── Graceful shutdown ───────────────────────────────────────────────────
+
+
+_shutdown_event = threading.Event()
+
+
+def _signal_handler(signum, frame):
+    logger.info("Received signal %d — shutting down…", signum)
+    _shutdown_event.set()
+
+
+def _register_signal_handlers():
+    """Register OS signal handlers for graceful shutdown."""
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, _signal_handler)
+        signal.signal(signal.SIGTERM, _signal_handler)
+
+
+# ─── Main runner with auto-restart ───────────────────────────────────────
+
+
+def run_bot():
+    """
+    Start the Telegram bot with automatic crash recovery.
+    Loops forever, restarting the bot on unexpected errors.
+    """
+    from telegram_bot import main as bot_main
+
+    max_restarts = 50
+    restart_count = 0
+    base_delay = 5  # seconds
+
+    while not _shutdown_event.is_set():
+        if restart_count >= max_restarts:
+            logger.critical("Max restarts (%d) reached — giving up", max_restarts)
+            sys.exit(1)
+
+        try:
+            logger.info(
+                "Starting bot (restart #%d of %d)…",
+                restart_count, max_restarts,
+            )
+            bot_main()
+            # bot_main() blocks — if it returns cleanly, we're done
+            logger.info("Bot exited cleanly.")
+            break
+        except KeyboardInterrupt:
+            logger.info("KeyboardInterrupt received.")
+            break
+        except SystemExit as e:
+            # Config validation failures exit with code 1 — don't restart
+            if e.code != 0:
+                logger.error("Bot exited with code %d — stopping.", e.code)
+                sys.exit(e.code)
+            break
+        except Exception as e:
+            restart_count += 1
+            delay = min(base_delay * (2 ** min(restart_count - 1, 5)), 300)
+            logger.exception(
+                "Bot crashed (restart %d/%d). Restarting in %ds…",
+                restart_count, max_restarts, delay,
+            )
+            _shutdown_event.wait(delay)
+
+    logger.info("Main loop exited.")
+
+
+# ─── Main ────────────────────────────────────────────────────────────────
+
+
+def main():
+    print("=" * 50)
+    print("  SMC Crypto Futures Scanner v2.0")
+    print("  Starting up…")
+    print("=" * 50)
+
+    # Signal handlers for graceful shutdown
+    _register_signal_handlers()
+
+    # Health server thread
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
+    logger.info("Health server thread started on port %d", HEALTH_PORT)
 
-    # Start the Telegram bot (blocking)
-    start_bot()
+    # Run the bot with auto-restart
+    run_bot()
+
+    print("\nBot has stopped. Goodbye!")
+
+
+if __name__ == "__main__":
+    main()

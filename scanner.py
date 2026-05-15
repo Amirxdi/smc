@@ -64,10 +64,10 @@ async def scan_symbol_levels(symbol, market, tracker=None, exchange=""):
 
         # Check for touches on 1d levels using the latest candle
         if current_1d:
-            touches_1d = tracker.check_touches(current_1d)
+            touches_1d = tracker.check_touches(current_1d, symbol=symbol)
             result["touches"].extend(touches_1d)
 
-            sweeps_1d = tracker.check_liquidity_sweeps(current_1d)
+            sweeps_1d = tracker.check_liquidity_sweeps(current_1d, symbol=symbol)
             result["sweeps"].extend(sweeps_1d)
 
     # ─── Fetch 4H candles ─────────────────────────────
@@ -85,10 +85,10 @@ async def scan_symbol_levels(symbol, market, tracker=None, exchange=""):
 
         # Check for touches on 4h levels
         if current_4h:
-            touches_4h = tracker.check_touches(current_4h)
+            touches_4h = tracker.check_touches(current_4h, symbol=symbol)
             result["touches"].extend(touches_4h)
 
-            sweeps_4h = tracker.check_liquidity_sweeps(current_4h)
+            sweeps_4h = tracker.check_liquidity_sweeps(current_4h, symbol=symbol)
             result["sweeps"].extend(sweeps_4h)
 
     # ─── Clean old levels ──────────────────────────────
